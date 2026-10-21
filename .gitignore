@@ -1,0 +1,99 @@
+# Production Pulse - files that must NOT be committed.
+# Rule of thumb: source code, configs, notebooks (without outputs), tests, docs, package.json and
+# package-lock.json ARE committed; anything re-creatable or private is ignored.
+# Directory patterns that start with "/" apply to the project root only, so they can never hide
+# a source folder that happens to share the name.
+
+# ---- Python virtual environments (never commit) ----
+.venv/
+.venv*/
+venv/
+env/
+
+# ---- Python caches / tooling ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+/build/
+/dist/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- Original datasets (1.4 GB; too large for git - kept locally, verified by docs/DATA_CHECKSUMS.md) ----
+*.RData
+*.rdata
+*.rda
+*.rds
+
+# ---- Generated data, model artifacts and logs (re-creatable from code) ----
+/data/
+/artifacts/
+/logs/
+*.keras
+*.h5
+*.joblib
+*.pkl
+*.npz
+*.parquet
+*.tmp
+
+# ---- SQLite databases (API prediction history lives in data/api/, already covered by /data/) ----
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-journal
+
+# ---- Generated evaluation outputs (written by the notebooks; figures in reports/figures/ stay trackable) ----
+/reports/evaluation_metrics.json
+/reports/*.csv
+/reports/evaluation_equal_fpr*.json
+/reports/experiments/
+# notebooks executed by scripts/verify/run.ps1 (they contain outputs)
+/reports/executed/
+
+# ---- Local secrets / environment files (the *.example templates are kept) ----
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# ---- Frontend: dependencies, build output, test output ----
+node_modules/
+/frontend/dist/
+/frontend/coverage/
+*.tsbuildinfo
+npm-debug.log*
+# frontend/package-lock.json is intentionally NOT ignored (reproducible installs)
+
+# ---- OS / editor clutter ----
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# ---- Write-access test file from the audit ----
+/docs/_access_check.txt
+
+# timestamped backups made before repairs (local only)
+/backups/
+
+# ---- Course materials (keep private; distributed by the faculty, not part of the code) ----
+/Mark Split 21CSE732P rubrics .pdf
+/Applied AI Industry Worklets Student Template.xlsx
+
+# ---- Held-out demo files (derived from the locked holdout runs; keep them off public copies) ----
+/reports/demo/holdout_*

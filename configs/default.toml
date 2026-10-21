@@ -1,0 +1,77 @@
+# Default configuration for Production Pulse.
+# Every value here must match the built-in defaults in
+# src/production_pulse/config.py (a test checks this).
+# All directory paths are RELATIVE to the project root and use forward
+# slashes so the same file works on Windows and Linux.
+
+project_name = "Production Pulse"
+random_seed = 42
+
+[paths]
+raw_data_dir = "."               # original .RData files stay in the project root (read-only)
+data_dir = "data"                # all generated data lives below here
+interim_dir = "data/interim"
+processed_dir = "data/processed"
+artifacts_dir = "artifacts"
+models_dir = "artifacts/models"
+reports_dir = "reports"
+figures_dir = "reports/figures"
+logs_dir = "logs"
+
+[data]
+# Verified in the Phase 1 audit (fault-free files): 3 id columns + 52 process variables.
+id_columns = ["faultNumber", "simulationRun", "sample"]
+n_process_variables = 52
+max_file_size_mb = 100           # refuse larger .RData files unless explicitly allowed
+
+[split]
+# Run-level split of the fault-free TRAINING file (by simulationRun, seeded by random_seed).
+train_fraction = 0.8
+validation_fraction = 0.2
+group_columns = ["simulationRun"]
+
+[evaluation]
+# Run-level split of the fault-free TESTING file (seeded by random_seed):
+# calibration -> thresholds only; evaluation -> final reporting only (never tuning);
+# holdout -> locked for the live demo on unseen data.
+calibration_fraction = 0.2
+evaluation_fraction = 0.7
+holdout_fraction = 0.1
+target_fpr = 0.01                # false-alarm rate on calibration-normal data
+
+[autoencoder]
+# 52 -> 32 -> 16 -> 8 -> 16 -> 32 -> 52 (decoder mirrors the encoder)
+hidden_layers = [32, 16]
+bottleneck = 8
+activation = "relu"
+output_activation = "linear"
+dropout = 0.0
+l2 = 0.0
+noise_std = 0.0                  # > 0 makes it a denoising autoencoder
+learning_rate = 0.001
+batch_size = 256
+epochs = 200
+patience = 10                    # early stopping on the validation split
+min_delta = 0.0
+deterministic = true
+
+[api]
+# FastAPI backend. Every value can be overridden by an environment variable
+# (see docs/API.md), e.g. PP_API_PORT=8001. Secrets such as the admin token for
+# model reloads are read ONLY from the environment (PP_API_ADMIN_TOKEN), never from here.
+host = "127.0.0.1"                               # local only by default
+port = 8000
+max_batch_size = 1000                            # samples per /predict request
+model_dir = "artifacts/models/autoencoder_v1"    # trained by notebooks/03
+database_path = "data/api/predictions.sqlite3"   # must be inside data/ (safe output folder)
+metrics_report = "reports/evaluation_metrics.json"
+cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]   # Vite/React dev servers; never "*"
+top_features = 5                                 # contributing features returned per sample
+history_default_page_size = 50
+history_max_page_size = 500
+store_inputs = false                             # do not store raw sensor values in the history DB
+
+[logging]
+level = "INFO"
+log_file_name = "production_pulse.log"
+console = true

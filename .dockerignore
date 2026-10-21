@@ -1,0 +1,16 @@
+.git
+.venv*
+**/node_modules
+frontend
+data
+logs
+notebooks
+reports/executed
+reports/figures
+reports/*.csv
+reports/evaluation_equal_fpr.json
+*.RData
+**/__pycache__
+.pytest_cache
+tests
+docs

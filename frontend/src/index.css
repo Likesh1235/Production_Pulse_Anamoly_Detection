@@ -1,0 +1,149 @@
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Production Pulse design tokens.
+   Principle (borrowed from high-performance HMI practice): the interface is
+   graphite and quiet; colour is spent only on state. Cyan = interaction and
+   data, green = normal, amber = warning / alarm limit, red = anomaly / error.
+   Colours are RGB triplets so Tailwind can apply opacity (bg-surface-2/70).
+   ========================================================================== */
+:root,
+[data-theme="dark"] {
+  --c-canvas: 16 20 24;          /* graphite */
+  --c-surface-1: 11 14 18;       /* navigation rail (darker than the work area) */
+  --c-surface-2: 22 27 33;       /* panels */
+  --c-surface-3: 30 36 44;       /* raised controls, table headers */
+  --c-line: 41 49 59;            /* hairlines */
+  --c-line-strong: 60 70 83;
+  --c-ink: 228 232 237;
+  --c-ink-muted: 155 165 177;
+  --c-ink-faint: 112 122 134;
+  --c-accent: 91 188 208;        /* steel cyan: interaction, focus, data series */
+  --c-accent-strong: 63 163 184;
+  --c-teal: 79 181 160;
+  --c-ok: 82 181 127;            /* normal */
+  --c-warn: 226 162 59;          /* warning, alarm limit */
+  --c-danger: 230 104 96;        /* anomaly, error */
+  --c-info: 127 167 216;
+  --radius-panel: 6px;
+  --radius-control: 4px;
+  --shadow-panel: none;
+  --shadow-pop: 0 10px 30px -12px rgb(0 0 0 / 0.7);
+  --grid-line: 41 49 59;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --c-canvas: 238 241 244;
+  --c-surface-1: 226 231 236;
+  --c-surface-2: 255 255 255;
+  --c-surface-3: 243 245 247;
+  --c-line: 213 219 226;
+  --c-line-strong: 185 194 204;
+  --c-ink: 24 32 42;
+  --c-ink-muted: 76 88 102;
+  --c-ink-faint: 110 121 134;
+  --c-accent: 22 120 141;
+  --c-accent-strong: 15 98 116;
+  --c-teal: 23 128 111;
+  --c-ok: 35 130 79;
+  --c-warn: 168 106 11;
+  --c-danger: 192 57 47;
+  --c-info: 47 100 168;
+  --shadow-panel: 0 1px 2px 0 rgb(24 32 42 / 0.05);
+  --shadow-pop: 0 10px 30px -12px rgb(24 32 42 / 0.3);
+  --grid-line: 213 219 226;
+  color-scheme: light;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-canvas font-sans text-[0.8125rem] leading-normal text-ink antialiased;
+    min-height: 100vh;
+  }
+  ::selection { background: rgb(var(--c-accent) / 0.3); }
+  :focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; border-radius: 3px; }
+  h1, h2, h3 { @apply font-semibold; letter-spacing: -0.005em; }
+  code, kbd, samp, .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .panel { @apply rounded-panel border border-line bg-surface-2 shadow-panel; }
+  .panel-header { @apply flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3; }
+  .panel-title { @apply text-[0.875rem] font-semibold text-ink; }
+  .panel-subtitle { @apply mt-0.5 text-xs text-ink-muted; }
+  /* Small secondary label (sentence case; no tracked-out capitals). */
+  .eyebrow { @apply text-xs font-medium text-ink-faint; }
+  /* Data provenance tag, e.g. the API endpoint a panel reads from. */
+  .source-tag { @apply inline-flex items-center rounded-[3px] border border-line px-1.5 py-px font-mono text-[0.6875rem] font-normal text-ink-faint; }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-control border px-3 py-1.5
+           text-[0.8125rem] font-medium transition-colors duration-150 ease-snappy
+           disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-primary { @apply btn border-accent-strong bg-accent-strong text-surface-1 hover:border-accent hover:bg-accent; }
+  [data-theme="light"] .btn-primary { @apply text-white; }
+  .btn-secondary { @apply btn border-line-strong bg-surface-3 text-ink hover:border-accent/60; }
+  .btn-ghost { @apply btn border-transparent bg-transparent text-ink-muted hover:bg-surface-3 hover:text-ink; }
+  .btn-danger { @apply btn border-danger/60 bg-danger/10 text-danger hover:bg-danger/20; }
+  .btn-sm { @apply px-2 py-1 text-xs; }
+  .btn-icon { @apply btn border-transparent p-1.5 text-ink-muted hover:bg-surface-3 hover:text-ink; }
+  .link { @apply text-accent underline-offset-2 hover:underline; }
+
+  .field-label { @apply mb-1 block text-xs font-medium text-ink-muted; }
+  .input {
+    @apply w-full rounded-control border border-line-strong bg-canvas px-3 py-1.5 text-[0.8125rem] text-ink
+           placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25
+           disabled:opacity-50;
+  }
+  .select { @apply input appearance-none pr-8; }
+
+  .table-shell { @apply relative w-full overflow-x-auto rounded-panel border border-line; }
+  .data-table { @apply w-full min-w-max border-collapse text-left text-[0.8125rem]; }
+  .data-table thead th {
+    @apply sticky top-0 z-[1] border-b border-line bg-surface-3 px-3 py-2 text-xs font-medium text-ink-muted;
+  }
+  .data-table tbody td { @apply border-b border-line/70 px-3 py-2 align-middle; }
+  .data-table tbody tr:last-child td { @apply border-b-0; }
+  .data-table tbody tr { @apply transition-colors hover:bg-surface-3/60; }
+  .data-table tbody tr[aria-selected="true"] { @apply bg-accent/10; box-shadow: inset 2px 0 0 rgb(var(--c-accent)); }
+  .num { @apply font-sans text-[0.8125rem]; font-variant-numeric: tabular-nums; }
+
+  .chip { @apply inline-flex items-center gap-1 rounded-[3px] border border-line bg-surface-3 px-1.5 py-0.5 font-mono text-[0.6875rem] text-ink-muted; }
+  .divider { @apply border-t border-line; }
+  .skeleton { @apply animate-pulse rounded bg-surface-3; }
+  /* Engineering-paper texture, only for empty plotting areas. */
+  .grid-bg {
+    background-image: linear-gradient(rgb(var(--grid-line) / 0.45) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--grid-line) / 0.45) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  /* Joined readout strip: cells separated by 1px hairlines (the gap shows the line colour). */
+  .readouts { @apply grid gap-px overflow-hidden rounded-panel border border-line bg-line; }
+  .readout-cell { @apply min-w-0 bg-surface-2 px-4 py-3; }
+}
+
+/* Recharts: inherit theme colours */
+.recharts-cartesian-grid line { stroke: rgb(var(--c-line) / 0.8); }
+.recharts-text { fill: rgb(var(--c-ink-faint)); font-size: 11px; font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
+.recharts-cartesian-axis-line { stroke: rgb(var(--c-line-strong)); }
+.recharts-legend-item-text { color: rgb(var(--c-ink-muted)) !important; font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,116 @@
+"""Start the API with Uvicorn, record real responses, then stop it.
+
+Writes logs/verification/30_api_results.json (status + body of every call) and
+30_uvicorn.log. The /predict sample comes from EVALUATION runs of the fault-free
+testing file (same seeded split as notebook 03); holdout runs are never used.
+"""
+
+from __future__ import annotations
+
+import json
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import httpx
+
+ROOT = Path(__file__).resolve().parents[2]
+LOG = ROOT / "logs" / "verification"
+sys.path.insert(0, str(ROOT / "src"))
+
+from production_pulse import get_paths, load_config  # noqa: E402
+from production_pulse.data import FEATURE_COLUMNS, load_raw_dataset  # noqa: E402
+from production_pulse.splitting import apply_split, split_runs  # noqa: E402
+
+PORT = 8000
+BASE = f"http://127.0.0.1:{PORT}"
+
+
+def port_free(port: int) -> bool:
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def evaluation_samples(n: int = 5) -> tuple[list[dict], dict]:
+    paths = get_paths()
+    cfg = load_config(root=paths.root)
+    test_raw = load_raw_dataset("fault_free_testing", paths=paths, config=cfg)
+    split = split_runs(test_raw, cfg.evaluation.fractions(), seed=cfg.random_seed, group_columns=cfg.split.group_columns)
+    ev = apply_split(test_raw, split)["evaluation"].sort_values(["simulationRun", "sample"]).head(n)
+    holdout_runs = set(split.runs("holdout"))
+    assert not set(ev["simulationRun"].astype(int)) & holdout_runs, "holdout run selected"
+    samples = [{"sample_id": f"eval-run{int(r.simulationRun)}-s{int(r.sample)}",
+                "features": {c: float(getattr(r, c)) for c in FEATURE_COLUMNS}} for r in ev.itertuples()]
+    info = {"source": "fault_free_testing / evaluation runs (seeded split)", "runs_used": sorted(set(ev["simulationRun"].astype(int))),
+            "n_holdout_runs_untouched": len(holdout_runs)}
+    return samples, info
+
+
+def main() -> int:
+    LOG.mkdir(parents=True, exist_ok=True)
+    if not port_free(PORT):
+        print(f"Port {PORT} is already in use - stop the other server first.")
+        return 3
+    log_file = open(LOG / "30_uvicorn.log", "w", encoding="utf-8")
+    cmd = [sys.executable, "-m", "uvicorn", "production_pulse.api.main:app", "--app-dir", "src", "--host", "127.0.0.1", "--port", str(PORT)]
+    print("starting:", " ".join(cmd))
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log_file, stderr=subprocess.STDOUT)
+    results: dict = {"command": cmd, "calls": []}
+    try:
+        with httpx.Client(base_url=BASE, timeout=60) as client:
+            t0 = time.time()
+            while True:
+                try:
+                    client.get("/health")
+                    break
+                except httpx.TransportError:
+                    if proc.poll() is not None or time.time() - t0 > 180:
+                        print("API did not start; see 30_uvicorn.log")
+                        return 2
+                    time.sleep(1)
+            results["startup_seconds"] = round(time.time() - t0, 1)
+
+            def call(name, method, path, **kw):
+                r = client.request(method, path, **kw)
+                try:
+                    body = r.json()
+                except ValueError:
+                    body = r.text
+                entry = {"name": name, "request": f"{method} {path}", "status": r.status_code, "body": body}
+                if "headers" in kw:
+                    entry["response_headers"] = {k: v for k, v in r.headers.items() if k.lower().startswith("access-control")}
+                results["calls"].append(entry)
+                print(f"{name:<24} {method} {path} -> {r.status_code}")
+                return r
+
+            call("health", "GET", "/health")
+            status = call("model_status", "GET", "/model/status").json()
+            call("metrics", "GET", "/metrics")
+            call("history_before", "GET", "/history", params={"limit": 5})
+            samples, info = evaluation_samples()
+            results["predict_input"] = info
+            call("predict_eval_runs", "POST", "/predict", json={"samples": samples})
+            missing = {k: v for k, v in samples[0]["features"].items() if k != "xmv_3"}
+            call("predict_missing_feature", "POST", "/predict", json={"features": missing})
+            call("history_after", "GET", "/history", params={"limit": 5})
+            call("cors_preflight_allowed", "OPTIONS", "/predict",
+                 headers={"Origin": "http://127.0.0.1:5173", "Access-Control-Request-Method": "POST"})
+            call("cors_preflight_other", "OPTIONS", "/predict",
+                 headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})
+            results["model_ready"] = bool(status.get("available"))
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        log_file.close()
+        (LOG / "30_api_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+        print("results written to", LOG / "30_api_results.json")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

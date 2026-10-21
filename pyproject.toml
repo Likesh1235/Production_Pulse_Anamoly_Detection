@@ -1,0 +1,58 @@
+# Project metadata and tool settings for Production Pulse.
+#
+# [project].dependencies lists only what the code in src/ imports at runtime.
+# Lower bounds are the versions verified in the Windows .venv313 environment
+# (see requirements-lock.txt for the exact full snapshot); upper bounds stop at the next major release.
+# Verified runtime: Python 3.13.14 on Windows. requires-python is unchanged (>=3.10); the full
+# TensorFlow stack has been exercised only on 3.13.
+# Optional extras (install with:  pip install -e ".[dev,notebooks,analysis]"):
+#   dev        - running the test suite and scripts/verify/api_smoke.py
+#   notebooks  - JupyterLab and the notebook execution tools
+#   analysis   - libraries named in the project brief that no module in src/ imports today
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "production-pulse"
+version = "0.1.0"
+description = "Multivariate process anomaly detection on the Tennessee Eastman Process using an autoencoder."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.2,<3",
+    "pandas>=2.3,<4",
+    "matplotlib>=3.10,<4",        # plots.py, notebooks
+    "pyreadr>=0.5.7,<0.6",        # data.py: read-only loading of the TEP .RData files
+    "pyarrow>=26,<27",            # DataFrame.to_parquet in anomaly_generation.py (saving labelled features)
+    "tensorflow>=2.21,<3",        # autoencoder.py (also installs Keras 3)
+    "fastapi>=0.153,<1",          # api/
+    "pydantic>=2.14,<3",          # api/schemas.py (imported directly)
+    "uvicorn>=0.54,<1",           # api/__main__.py and the documented start command
+    "tomli>=2.0; python_version < '3.11'",   # config.py falls back to tomli where tomllib is missing
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1,<10",
+    "httpx>=0.28,<1",             # FastAPI TestClient and scripts/verify/api_smoke.py
+]
+notebooks = [
+    "jupyterlab>=4.6,<5",
+    "ipykernel>=7.4,<8",
+    "nbconvert>=7.17,<8",
+    "nbclient>=0.11,<1",
+]
+analysis = [
+    "scikit-learn>=1.9,<2",       # only an optional cross-check in tests/test_evaluation.py
+    "scipy>=1.18,<2",
+    "seaborn>=0.13,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

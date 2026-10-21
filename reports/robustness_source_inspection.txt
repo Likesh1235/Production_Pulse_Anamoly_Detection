@@ -1,0 +1,314 @@
+=== AUTOENCODER SCORING ===
+            raise AutoencoderError("No Keras model is loaded")
+
+    def _reconstruct(self, x: np.ndarray) -> np.ndarray:
+        self._require_model()
+        out = self.model_.predict(x.astype(np.float32), batch_size=max(self.settings.batch_size, 1024), verbose=0)
+        return np.asarray(out, dtype=np.float64)
+
+    def _score(self, x: np.ndarray) -> np.ndarray:
+        return np.mean((x - self._reconstruct(x)) ** 2, axis=1)
+
+    def reconstruct(self, df: pd.DataFrame) -> pd.DataFrame:
+        x = self._matrix(df, "input")
+        return pd.DataFrame(self._reconstruct(x), index=df.index, columns=list(self.feature_columns))
+
+    def reconstruction_errors(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Per-feature squared error; its row mean equals :meth:`score`."""
+        x = self._matrix(df, "input")
+        return pd.DataFrame((x - self._reconstruct(x)) ** 2, index=df.index, columns=list(self.feature_columns))
+
+    def _scale_raw(self, df_raw: pd.DataFrame) -> pd.DataFrame:
+        if self.scaler is None:
+            raise AutoencoderError("No scaler attached; use attach_scaler() or pass scaled features to detect()")
+        return self.scaler.transform_frame(df_raw)
+
+    def score_raw(self, df_raw: pd.DataFrame) -> np.ndarray:
+        return self.score(self._scale_raw(df_raw))
+
+    def detect_raw(self, df_raw: pd.DataFrame, *, check_unseen: bool = True) -> Detection:
+        """Score RAW (unscaled) sensor values using the attached training scaler."""
+        return self.detect(self._scale_raw(df_raw), check_unseen=check_unseen)
+
+    def detect_with_errors(self, df: pd.DataFrame, *, check_unseen: bool = True) -> tuple[Detection, pd.DataFrame]:
+        """Like :meth:`detect` on SCALED data, but runs the network ONCE and also returns the
+        per-feature squared errors. ``scores`` are the row means of those errors, which is exactly
+        what :meth:`score` computes, so the decision is identical to ``detect``.
+        """
+        self._require_model()
+        if self.threshold_ is None:
+            raise BaselineError(f"{self.name}: no threshold yet; call calibrate() on calibration-normal data")
+        if check_unseen:
+            self.assert_unseen(df)
+        x = self._matrix(df, "input")
+        squared = (x - self._reconstruct(x)) ** 2
+        scores = np.mean(squared, axis=1)
+        detection = Detection(self.name, scores, scores > self.threshold_, float(self.threshold_), self.threshold_source_)
+=== AUTOENCODER LOADING ===
+        cls,
+        directory: PathLike,
+        *,
+        paths: Optional[ProjectPaths] = None,
+        expected_feature_columns: Optional[Sequence[str]] = FEATURE_COLUMNS,
+        require_manifest: bool = False,
+    ) -> "AutoencoderDetector":
+        """Load a saved detector and validate its schema, feature order and file integrity.
+
+        If ``manifest.json`` exists, every artifact file (including the threshold and scaler in
+        ``metadata.json``) must match it. Artifacts saved before manifests existed still load, with a
+        warning, unless ``require_manifest=True``. Create one with ``scripts/write_artifact_manifest.py``.
+        """
+        d = Path(directory)
+        if not d.is_absolute():
+            d = (paths or get_paths()).root / d
+        meta_path = d / METADATA_FILE
+        if not meta_path.is_file():
+            raise AutoencoderError(f"No {METADATA_FILE} in {d} (missing or interrupted save)")
+        integrity = verify_manifest(d)
+        if integrity == "absent":
+            if require_manifest:
+                raise AutoencoderError(f"No {MANIFEST_FILE} in {d} and a manifest is required")
+            log.warning("No %s in %s: metadata (threshold, scaler) is not integrity-checked", MANIFEST_FILE, d)
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise AutoencoderError(f"{meta_path} is not valid JSON: {exc}") from exc
+        if meta.get("format_version") != MODEL_FORMAT_VERSION or meta.get("model_type") != MODEL_TYPE:
+            raise AutoencoderError(
+                f"Unsupported artifact (format_version={meta.get('format_version')}, model_type={meta.get('model_type')})"
+            )
+        cols = tuple(meta.get("feature_columns") or ())
+        if expected_feature_columns is not None and cols != tuple(expected_feature_columns):
+            missing = [c for c in expected_feature_columns if c not in cols]
+            raise AutoencoderError(
+                "Saved model feature schema does not match the expected feature order"
+                + (f"; missing {missing[:5]}" if missing else " (same names, different order)")
+            )
+        model_path = d / MODEL_FILE
+        if not model_path.is_file():
+            raise AutoencoderError(f"Model file missing: {model_path}")
+        if _sha256(model_path) != meta.get("model_sha256"):
+            raise AutoencoderError("Model file checksum does not match metadata (file changed or mixed artifacts)")
+
+        det = cls(cols, settings=AutoencoderSettings.from_dict(meta["settings"]), seed=int(meta.get("seed", 0)))
+        _, keras = _import_keras()
+        model = keras.models.load_model(str(model_path), compile=False)
+        if tuple(model.input_shape)[-1] != len(cols) or tuple(model.output_shape)[-1] != len(cols):
+            raise AutoencoderError(
+                f"Model shape {model.input_shape}->{model.output_shape} does not match {len(cols)} features"
+            )
+        det.model_ = model
+        if meta.get("scaler") is not None:
+            det.attach_scaler(FeatureScaler.from_dict(meta["scaler"]))
+        fp_path = d / FINGERPRINT_FILE
+        if fp_path.is_file():
+            with np.load(fp_path) as fps:
+                det._fit_fp = fps["fit"].astype(np.uint64)
+                det._cal_fp = fps["calibration"].astype(np.uint64) if fps["calibration"].size else None
+        else:
+            log.warning("No fingerprints found: leakage checks against training data are unavailable")
+            det._fit_fp = np.array([], dtype=np.uint64)
+        hist_path = d / HISTORY_FILE
+        if hist_path.is_file():
+            det.history_ = pd.read_csv(hist_path, index_col=0)
+        det.threshold_ = meta.get("threshold")
+        det.threshold_source_ = meta.get("threshold_source", "")
+        det.n_fit_rows_ = int(meta.get("n_fit_rows", 0))
+        det.n_validation_rows_ = int(meta.get("n_validation_rows", 0))
+        det.n_calibration_rows_ = int(meta.get("n_calibration_rows", 0))
+        det.training_summary_ = dict(meta.get("training_summary") or {})
+        log.info("Loaded autoencoder from %s (threshold=%s)", d, det.threshold_)
+        return det
+
+    def summary(self) -> dict[str, Any]:
+        """Human-readable state for notebooks/APIs."""
+        return {
+            "detector": self.name,
+            "fitted": self.is_fitted,
+            "settings": self.settings.to_dict(),
+            "training": self.training_summary_,
+            "n_validation_rows": self.n_validation_rows_,
+            "has_scaler": self.scaler is not None,
+            **self.threshold_info(),
+        }
+=== PROJECT PATHS ===
+"""Project-root discovery and safe output-path handling.
+
+Root resolution order (no username or current directory is assumed):
+1. an explicit ``start`` folder passed by the caller (searched upwards),
+2. the ``PRODUCTION_PULSE_ROOT`` environment variable,
+3. the location of this installed source file (searched upwards).
+
+A folder counts as the project root when it contains ``pyproject.toml`` and
+``src/production_pulse/__init__.py``.
+
+Write safety: generated files may only be created inside the configured
+output folders (data/, artifacts/, reports/, logs/ by default). Original
+datasets, course files, the checksum baseline and any ``.RData`` file are
+always refused.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Union
+
+from .config import PROTECTED_RELATIVE_PATHS, RAW_DATA_FILES, ProjectConfig, load_config
+
+PathLike = Union[str, os.PathLike]
+
+ROOT_ENV_VAR = "PRODUCTION_PULSE_ROOT"
+_PACKAGE_DIR = Path(__file__).resolve().parent
+_FORBIDDEN_OUTPUT_SUFFIXES = {".rdata", ".rda", ".rds"}
+
+
+class ProjectRootNotFoundError(RuntimeError):
+    """Raised when the project root cannot be located."""
+
+
+class UnsafeOutputPathError(ValueError):
+    """Raised when a write would touch original data or leave the output area."""
+
+
+def _is_project_root(candidate: Path) -> bool:
+    return (candidate / "pyproject.toml").is_file() and (
+        candidate / "src" / "production_pulse" / "__init__.py"
+    ).is_file()
+
+
+def _search_upwards(start: Path) -> Optional[Path]:
+    for candidate in (start, *start.parents):
+        if _is_project_root(candidate):
+            return candidate
+    return None
+
+
+def find_project_root(start: Optional[PathLike] = None) -> Path:
+    """Return the absolute project root (see module docstring for the order)."""
+    if start is not None:
+        begin = Path(start).expanduser().resolve()
+        found = _search_upwards(begin)
+        if found is None:
+            raise ProjectRootNotFoundError(f"No Production Pulse project root at or above {begin}")
+        return found
+
+    env_value = os.environ.get(ROOT_ENV_VAR)
+    if env_value:
+        env_root = Path(env_value).expanduser().resolve()
+        if not _is_project_root(env_root):
+            raise ProjectRootNotFoundError(
+                f"{ROOT_ENV_VAR}={env_value!r} is not a Production Pulse project root "
+                "(needs pyproject.toml and src/production_pulse/)."
+            )
+        return env_root
+
+    found = _search_upwards(_PACKAGE_DIR)
+    if found is None:
+        raise ProjectRootNotFoundError(
+            f"Could not locate the project root above {_PACKAGE_DIR}. "
+            f"Set {ROOT_ENV_VAR} to the project folder."
+        )
+    return found
+
+
+def _norm(path: Path) -> str:
+    """Absolute, symlink-resolved, case-normalised (on Windows) string form."""
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def _is_within(child: Path, parent: Path) -> bool:
+    c, p = _norm(child), _norm(parent)
+    try:
+        return os.path.commonpath([c, p]) == p
+    except ValueError:  # e.g. different Windows drives
+        return False
+
+
+@dataclass(frozen=True)
+class ProjectPaths:
+    root: Path
+    raw_data_dir: Path
+    data_dir: Path
+    interim_dir: Path
+    processed_dir: Path
+    artifacts_dir: Path
+    models_dir: Path
+    reports_dir: Path
+    figures_dir: Path
+    logs_dir: Path
+    configs_dir: Path
+    notebooks_dir: Path
+
+    @property
+    def output_dirs(self) -> tuple[Path, ...]:
+        """Every generated-output folder (created by :func:`ensure_output_dirs`)."""
+        return (
+            self.data_dir,
+            self.interim_dir,
+            self.processed_dir,
+            self.artifacts_dir,
+            self.models_dir,
+            self.reports_dir,
+            self.figures_dir,
+            self.logs_dir,
+        )
+
+    @property
+    def protected_files(self) -> tuple[Path, ...]:
+        """Original files that must never be written (raw data resolved via raw_data_dir)."""
+        raw = tuple(self.raw_data_dir / name for name in RAW_DATA_FILES.values())
+        others = tuple(
+            self.root / rel for rel in PROTECTED_RELATIVE_PATHS if rel not in RAW_DATA_FILES.values()
+        )
+        return raw + others
+
+    def raw_file(self, key: str) -> Path:
+        """Path of an original dataset by key (e.g. 'fault_free_training'). Does not open it."""
+        try:
+            return self.raw_data_dir / RAW_DATA_FILES[key]
+        except KeyError:
+            raise KeyError(f"Unknown raw data key {key!r}; choose from {sorted(RAW_DATA_FILES)}") from None
+
+
+def get_paths(root: Optional[PathLike] = None, config: Optional[ProjectConfig] = None) -> ProjectPaths:
+    """Build and validate all project paths. Creates nothing on disk."""
+    root_path = find_project_root(root) if root is not None else find_project_root()
+    cfg = config if config is not None else load_config(root=root_path)
+    pc = cfg.paths
+
+    def at(rel: str) -> Path:
+        return (root_path / rel).resolve()
+
+    paths = ProjectPaths(
+        root=root_path,
+        raw_data_dir=at(pc.raw_data_dir),
+        data_dir=at(pc.data_dir),
+        interim_dir=at(pc.interim_dir),
+        processed_dir=at(pc.processed_dir),
+        artifacts_dir=at(pc.artifacts_dir),
+        models_dir=at(pc.models_dir),
+        reports_dir=at(pc.reports_dir),
+        figures_dir=at(pc.figures_dir),
+        logs_dir=at(pc.logs_dir),
+        configs_dir=at("configs"),
+        notebooks_dir=at("notebooks"),
+    )
+    _validate_layout(paths)
+    return paths
+
+
+def _validate_layout(paths: ProjectPaths) -> None:
+    for out in paths.output_dirs:
+        if not _is_within(out, paths.root) or _norm(out) == _norm(paths.root):
+            raise UnsafeOutputPathError(f"Output folder {out} must be a sub-folder of {paths.root}")
+        if _norm(out) == _norm(paths.raw_data_dir):
+            raise UnsafeOutputPathError(f"Output folder {out} must not be the raw-data folder")
+        for protected in paths.protected_files:
+            if _is_within(protected, out):
+                raise UnsafeOutputPathError(
+                    f"Output folder {out} would contain protected file {protected.name}"
+                )
+
+

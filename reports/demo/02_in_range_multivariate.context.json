@@ -1,0 +1,12 @@
+{
+  "run": 49,
+  "family": "coordinated_shift",
+  "seed": 42,
+  "injected_rows": 69,
+  "ae_flagged": 14,
+  "rule_flagged": 0,
+  "ae_threshold": 0.8851983375918899,
+  "chosen_sample": 500,
+  "ae_score": 1.7030407200453412,
+  "qualifying_rows": 14
+}
